@@ -7,9 +7,12 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.navdiret.app"
     },
     "android": {
+      "package": "com.navdiret.app",
+      "versionCode": 2,
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -20,6 +23,31 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-status-bar",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow NavDiret to use your location while you use the app to identify your current place and improve navigation.",
+          "locationAlwaysAndWhenInUsePermission": "Allow NavDiret to keep using your location for travel tracking when you choose to enable background location in a native build.",
+          "isAndroidForegroundServiceEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isIosBackgroundLocationEnabled": true
+        }
+      ],
+      "expo-maps",
+      "expo-sqlite"
+    ],
+    "extra": {
+      "googleMapsConfigured": false,
+      "routingBaseUrl": {},
+      "geocodingBaseUrl": {},
+      "routingProfile": "driving",
+      "eas": {
+        "projectId": "1ca21f11-fd02-4e6c-be0a-edaae0bb251a"
+      }
+    },
+    "owner": "joshuawins-team"
   }
 }
