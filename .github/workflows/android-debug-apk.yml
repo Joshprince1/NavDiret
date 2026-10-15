@@ -2,6 +2,9 @@ name: Android debug APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - review/navdiret-maplibre-location-ci
 
 permissions:
   contents: read
