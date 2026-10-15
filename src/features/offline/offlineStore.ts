@@ -3,6 +3,7 @@ import type * as Location from 'expo-location';
 import type { RoutePlan, SavedPlaceCategory, SavedPlaceCategoryDetails } from '../routing/routingTypes';
 
 import { distanceBetweenMeters, type ResolvedPlace } from '../location/placeResolver';
+import { isLocationFixNewer, isValidCoordinate } from '../location/locationTelemetry';
 
 export type RecentRoute = {
   id: string;
@@ -130,19 +131,30 @@ export async function findCachedPlace(latitude: number, longitude: number, radiu
   const nearest = rows
     .map((row) => ({ row, distance: distanceBetweenMeters({ latitude, longitude }, row) }))
     .filter(({ distance }) => distance <= radiusMeters)
-    .sort((first, second) => first.distance - second.distance)[0]?.row;
+    .sort((first, second) => first.distance - second.distance)[0];
   if (!nearest) return null;
   try {
-    return { title: nearest.title, subtitle: nearest.subtitle, address: JSON.parse(nearest.address_json) as Location.LocationGeocodedAddress };
+    return {
+      title: nearest.row.title,
+      subtitle: nearest.row.subtitle,
+      address: JSON.parse(nearest.row.address_json) as Location.LocationGeocodedAddress,
+      source: 'cached',
+      cacheCoordinate: { latitude: nearest.row.latitude, longitude: nearest.row.longitude },
+      cacheDistanceMeters: nearest.distance,
+      cachedAt: nearest.row.cached_at,
+    };
   } catch {
     return null;
   }
 }
 
 export async function saveLocationFix(location: Location.LocationObject, source: 'foreground' | 'background') {
-  const database = await getDatabase();
   const { latitude, longitude, accuracy } = location.coords;
   const timestamp = location.timestamp;
+  if (!isValidCoordinate(latitude, longitude) || !Number.isFinite(timestamp)) return;
+  const database = await getDatabase();
+  const latestFix = await getLatestCachedLocation();
+  if (latestFix && !isLocationFixNewer(latestFix.timestamp, timestamp)) return;
   const currentRoute = await database.getFirstAsync<{ value: string }>(
     "SELECT value FROM app_settings WHERE key = 'active_route_id'",
   );
@@ -150,8 +162,10 @@ export async function saveLocationFix(location: Location.LocationObject, source:
   const cachedPlace = await findCachedPlace(latitude, longitude).catch(() => null);
   if (!routeId) {
     await database.runAsync(
-      "INSERT INTO app_settings (key, value) VALUES ('latest_location_fix', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-      JSON.stringify({ latitude, longitude, accuracy, timestamp }),
+      `INSERT INTO app_settings (key, value) VALUES ('latest_location_fix', ?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value
+       WHERE COALESCE(CAST(json_extract(app_settings.value, '$.timestamp') AS INTEGER), 0) <= ?`,
+      JSON.stringify({ latitude, longitude, accuracy, timestamp }), timestamp,
     );
     return;
   }
@@ -160,16 +174,23 @@ export async function saveLocationFix(location: Location.LocationObject, source:
       'SELECT latitude, longitude, recorded_at FROM location_fixes WHERE route_id = ? ORDER BY recorded_at DESC LIMIT 1', routeId,
     )
     : null;
-  if (previous && timestamp - previous.recorded_at < 10_000
-    && distanceBetweenMeters(previous, { latitude, longitude }) < 12) return;
+  if (previous && (timestamp < previous.recorded_at || (timestamp - previous.recorded_at < 10_000
+    && distanceBetweenMeters(previous, { latitude, longitude }) < 12))) return;
 
   await database.runAsync(
-    'INSERT INTO location_fixes (latitude, longitude, accuracy, place_title, place_subtitle, recorded_at, source, route_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    `INSERT INTO location_fixes (latitude, longitude, accuracy, place_title, place_subtitle, recorded_at, source, route_id)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?
+     WHERE NOT EXISTS (SELECT 1 FROM location_fixes WHERE route_id = ? AND recorded_at > ?)`,
     latitude, longitude, accuracy, cachedPlace?.title ?? null, cachedPlace?.subtitle ?? null, timestamp, source, routeId,
+    routeId, timestamp,
   );
   await database.runAsync(
-    "INSERT INTO app_settings (key, value) VALUES ('latest_location_fix', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-    JSON.stringify({ latitude, longitude, accuracy, timestamp }),
+    `INSERT INTO app_settings (key, value) VALUES ('latest_location_fix', ?)
+     ON CONFLICT(key) DO UPDATE SET value=excluded.value
+     WHERE COALESCE(CAST(json_extract(app_settings.value, '$.timestamp') AS INTEGER), 0) <= ?
+       AND (? IS NULL OR ? >= COALESCE((SELECT MAX(recorded_at) FROM location_fixes WHERE route_id = ?), 0))`,
+    JSON.stringify({ latitude, longitude, accuracy, timestamp }), timestamp,
+    routeId, timestamp, routeId,
   );
 }
 

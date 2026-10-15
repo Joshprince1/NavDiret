@@ -6,6 +6,7 @@ import { Platform } from 'react-native';
 
 import { findCachedPlace, getBackgroundGeocodeState, saveCachedPlace, saveLocationFix, setBackgroundGeocodeState } from '../offline/offlineStore';
 import { distanceBetweenMeters, resolvePlace } from './placeResolver';
+import { isValidCoordinate } from './locationTelemetry';
 
 export const BACKGROUND_LOCATION_TASK = 'navdiret-background-location-v1';
 
@@ -16,22 +17,23 @@ let geocodeInProgress = false;
 
 async function resolveBackgroundPlace(location: Location.LocationObject) {
   if (geocodeInProgress) return;
-  const { latitude, longitude } = location.coords;
-  if (await findCachedPlace(latitude, longitude).catch(() => null)) return;
-
-  const network = await Network.getNetworkStateAsync().catch(() => null);
-  if (!network || network.isInternetReachable === false || network.isConnected === false) return;
-  const power = await Battery.getPowerStateAsync().catch(() => null);
-  if (power && (power.lowPowerMode || (power.batteryState === Battery.BatteryState.UNPLUGGED
-    && power.batteryLevel >= 0 && power.batteryLevel <= 0.15))) return;
-
-  const previous = await getBackgroundGeocodeState().catch(() => null);
-  const now = Date.now();
-  if (previous && (now - previous.at < MIN_BACKGROUND_GEOCODE_INTERVAL_MS
-    || distanceBetweenMeters(previous, { latitude, longitude }) < MIN_BACKGROUND_GEOCODE_DISTANCE_METERS)) return;
-
   geocodeInProgress = true;
   try {
+    const { latitude, longitude } = location.coords;
+    if (!isValidCoordinate(latitude, longitude)) return;
+    if (await findCachedPlace(latitude, longitude).catch(() => null)) return;
+
+    const network = await Network.getNetworkStateAsync().catch(() => null);
+    if (!network || network.isInternetReachable === false || network.isConnected === false) return;
+    const power = await Battery.getPowerStateAsync().catch(() => null);
+    if (power && (power.lowPowerMode || (power.batteryState === Battery.BatteryState.UNPLUGGED
+      && power.batteryLevel >= 0 && power.batteryLevel <= 0.15))) return;
+
+    const previous = await getBackgroundGeocodeState().catch(() => null);
+    const now = Date.now();
+    if (previous && (now - previous.at < MIN_BACKGROUND_GEOCODE_INTERVAL_MS
+      || distanceBetweenMeters(previous, { latitude, longitude }) < MIN_BACKGROUND_GEOCODE_DISTANCE_METERS)) return;
+
     // Persist the attempt first so task restarts and failed lookups remain throttled.
     await setBackgroundGeocodeState({ latitude, longitude, at: now });
     const place = await resolvePlace(latitude, longitude);
@@ -45,6 +47,7 @@ if (Platform.OS !== 'web') {
   TaskManager.defineTask<LocationTaskPayload>(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
     if (error || !data?.locations?.length) return;
     for (const location of data.locations) {
+      if (!isValidCoordinate(location.coords.latitude, location.coords.longitude)) continue;
       await saveLocationFix(location, 'background');
       try { await resolveBackgroundPlace(location); } catch { /* Keep background tracking alive if lookup or storage fails. */ }
     }

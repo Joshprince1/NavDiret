@@ -5,7 +5,7 @@ NavDiret defines two EAS Android builds:
 - `preview` creates an internally distributed installable APK for testers.
 - `production` creates a Play Store AAB. Its build number auto-increments from the local app config.
 
-The current Android application ID is `com.navdiret.app`; the user-facing version is `1.0.0`, with initial `android.versionCode` set to `1`. Keep the package ID stable after publishing. EAS increments the production version code for each production build; update `version` when preparing a new user-facing release.
+The current Android application ID is `com.navdiret.app`; the user-facing version is `1.0.0`, with `android.versionCode` set to `2`. Keep the package ID stable after publishing. EAS increments the production version code for each production build; update `version` when preparing a new user-facing release.
 
 ## First-time EAS setup
 

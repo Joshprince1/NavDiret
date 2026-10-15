@@ -16,14 +16,14 @@ or:
 npx expo run:android --device
 ```
 
-The command builds and installs the native debug app, then starts Metro. Keep that terminal open during JavaScript development. The PowerShell helper checks that an authorized device is connected before starting. For map tiles, set `GOOGLE_MAPS_API_KEY` in the current PowerShell session before building; never commit the key. Route and geocoding endpoints remain optional and private.
+The command builds and installs the native debug app, then starts Metro. Keep that terminal open during JavaScript development. The PowerShell helper checks that an authorized device is connected before starting. MapLibre renders OpenStreetMap raster tiles without a Google Maps API key. The default is `https://tile.openstreetmap.org/{z}/{x}/{y}.png`; an organization-operated compatible tile endpoint can be selected at build time with `NAVDIRET_MAP_TILES_URL`. OpenStreetMap’s public tile service is best-effort and subject to its tile usage policy; it is not an offline tile download service. Route and geocoding endpoints remain optional and private.
 
 If native dependencies or app configuration change later, regenerate the native project with `npx expo prebuild --platform android --no-install`, then rebuild. Do not edit generated Android files by hand.
 
 ## Test foreground and screen-off tracking
 
 1. Launch NavDiret while outdoors or near a window and allow location access while using the app.
-2. Expand the place sheet and opt in to background trip tracking. Grant background / all-the-time location access when Android asks.
+2. Expand the place sheet and opt in to background trip tracking. Grant background / all-the-time location access when Android asks. On Android 13+, allow notifications if you want the service status visible in the notification drawer; if declined, Android still lists the running service in Task Manager.
 3. Confirm Android's foreground-service notification says NavDiret is tracking and that the app shows its background-tracking badge.
 4. Lock the screen and travel for several minutes in an open area. Reopen NavDiret and confirm the trip's recent route and breadcrumbs are present locally.
 5. Repeat with battery saver enabled or a low unplugged battery to observe the reduced sampling profile and the battery-aware status badge.

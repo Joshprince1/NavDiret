@@ -1,6 +1,6 @@
-import Constants from 'expo-constants';
 import { StatusBar } from 'expo-status-bar';
-import { AppleMaps, GoogleMaps } from 'expo-maps';
+import Constants from 'expo-constants';
+import { addCustomHeader, removeCustomHeader, Camera, CircleLayer, FillLayer, LineLayer, MapView, RasterLayer, RasterSource, ShapeSource, type CameraRef } from '@maplibre/maplibre-react-native';
 import * as Haptics from 'expo-haptics';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -23,6 +23,7 @@ import { useBatteryAwareTracking } from '../location/useBatteryAwareTracking';
 import { finishRouteSession, getRecentRoutes, getRouteCoordinates, getSavedDestinations, saveDestination, startRouteSession, type RecentRoute, type SavedDestination } from '../offline/offlineStore';
 import { useConnectivity } from '../offline/useConnectivity';
 import { distanceBetweenMeters } from '../location/placeResolver';
+import type { LocationTelemetry } from '../location/locationTelemetry';
 import { formatDistance, getGuidanceSnapshot } from '../routing/routeGeometry';
 import { useNavigationSession } from '../routing/useNavigationSession';
 import type { Destination, SavedPlaceCategoryDetails } from '../routing/routingTypes';
@@ -40,7 +41,8 @@ const COLORS = {
   line: 'rgba(237, 250, 249, 0.12)',
 };
 
-const mapKeyConfigured = Platform.OS !== 'android' || Boolean(Constants.expoConfig?.extra?.googleMapsConfigured);
+const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+const mapTilesUrl = (Constants.expoConfig?.extra?.mapTilesUrl as string | undefined) || OSM_TILE_URL;
 const PRESET_CATEGORIES: SavedPlaceCategoryDetails[] = [
   { category: 'favorite', categoryLabel: 'Favorites', categoryIcon: '★', categoryColor: '#72E5D1' },
   { category: 'home', categoryLabel: 'Home', categoryIcon: '⌂', categoryColor: '#7BC9FF' },
@@ -51,8 +53,7 @@ const CATEGORY_COLORS = ['#72E5D1', '#7BC9FF', '#C1A2FF', '#FFC27D', '#F49AA8'];
 function NavigationHomeScreenView() {
   const session = useLocationSession();
   const offline = useConnectivity();
-  const googleMapRef = useRef<GoogleMaps.MapView>(null);
-  const appleMapRef = useRef<AppleMaps.MapView>(null);
+  const cameraRef = useRef<CameraRef>(null);
   const [northUp, setNorthUp] = useState(true);
   const [bearing, setBearing] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -226,9 +227,12 @@ function NavigationHomeScreenView() {
       void refreshLocation();
       return;
     }
-    const camera = { coordinates: { latitude: position.coords.latitude, longitude: position.coords.longitude }, zoom: 17 };
-    if (Platform.OS === 'android') void googleMapRef.current?.setCameraPosition({ ...camera, duration: 500 });
-    if (Platform.OS === 'ios') void appleMapRef.current?.setCameraPosition(camera);
+    cameraRef.current?.setCamera({
+      centerCoordinate: [position.coords.longitude, position.coords.latitude],
+      zoomLevel: 17,
+      animationDuration: 500,
+      animationMode: 'easeTo',
+    });
   }, [position, refreshLocation]);
 
   const resetNorth = useCallback(() => {
@@ -265,9 +269,7 @@ function NavigationHomeScreenView() {
           coordinates={coordinates}
           routeCoordinates={activeGuidance && navigation.route ? navigation.route.geometry : recentRouteCoordinates}
           accuracy={session.accuracy}
-          mapReady={mapKeyConfigured}
-          googleMapRef={googleMapRef}
-          appleMapRef={appleMapRef}
+          cameraRef={cameraRef}
           northUp={northUp}
           isNight={preferences.isNight}
           onBearingChange={onBearingChange}
@@ -352,6 +354,7 @@ function NavigationHomeScreenView() {
                 <View><Text style={styles.guidanceEta}>{guidance && guidanceFresh ? formatDuration(guidance.remainingSeconds) : '—'}</Text><Text style={styles.guidanceMeta}>{guidance && guidanceFresh ? `${navigation.route.mode === 'simulation' ? 'simulated · ' : ''}remaining · ${formatDistance(guidance.remainingMeters)}` : 'Waiting for a fresh GPS fix'}</Text></View>
                 <View style={styles.destinationMini}><Text style={styles.destinationMiniEyebrow}>DESTINATION</Text><Text numberOfLines={1} style={styles.destinationMiniTitle}>{navigation.route.destination.title}</Text></View>
               </View>
+              <LocationTelemetryHud telemetry={session.telemetry} isNight={preferences.isNight} trackingStatus={session.backgroundStatus} />
               {navigation.routeError && !(guidanceFresh && guidance?.isOffRoute) ? <Text numberOfLines={2} style={styles.featureMessage}>{navigation.routeError}</Text> : null}
               <View style={styles.guidanceActions}>
                 {navigation.route.mode === 'simulation' ? <Pressable disabled={!guidance?.nextManeuver || !guidanceFresh} onPress={() => {
@@ -377,6 +380,7 @@ function NavigationHomeScreenView() {
           isLive={active}
           ageLabel={ageLabel}
           accuracyLabel={accuracyLabel}
+          telemetry={session.telemetry}
           backgroundStatus={session.backgroundStatus}
           backgroundMessage={session.backgroundMessage}
           onToggleBackground={session.toggleBackgroundTracking}
@@ -396,7 +400,7 @@ function NavigationHomeScreenView() {
             <Text style={styles.retryText}>LOCATION NEEDS ATTENTION · TAP TO RETRY</Text>
           </Pressable>
         ) : null}
-        <Animated.Text style={[styles.mapAttribution, { bottom: 530, transform: [{ translateY: sheetOffset }] }]}>MAP DATA · {Platform.OS === 'ios' ? 'APPLE MAPS' : 'GOOGLE MAPS'}</Animated.Text>
+        <Animated.Text style={[styles.mapAttribution, { bottom: 530, transform: [{ translateY: sheetOffset }] }]}>© OpenStreetMap contributors</Animated.Text>
       </View>
       <Modal visible={searchVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setSearchVisible(false)}>
         <SafeAreaView style={styles.searchModal}>
@@ -532,6 +536,7 @@ type PlaceBottomSheetProps = {
   isLive: boolean;
   ageLabel: string;
   accuracyLabel: string;
+  telemetry: LocationTelemetry;
   backgroundStatus: string;
   backgroundMessage: string | null;
   onToggleBackground: () => void;
@@ -549,7 +554,7 @@ type PlaceBottomSheetProps = {
 
 const PlaceBottomSheet = memo(function PlaceBottomSheet({
   offset, opacity, expanded, onToggleExpanded, placeTitle, placeSubtitle, placeResolving, onRefreshPlace,
-  isLive, ageLabel, accuracyLabel, backgroundStatus, backgroundMessage, onToggleBackground, recentRoutes,
+  isLive, ageLabel, accuracyLabel, telemetry, backgroundStatus, backgroundMessage, onToggleBackground, recentRoutes,
   coordinatesLabel, error, isNight, theme, onSetTheme, speedUnit, onSetSpeedUnit, speedLimitKmh, onSetSpeedLimitKmh,
 }: PlaceBottomSheetProps) {
   const tracking = backgroundStatus === 'running';
@@ -573,12 +578,15 @@ const PlaceBottomSheet = memo(function PlaceBottomSheet({
         <View style={styles.metaSeparator} />
         <View style={styles.metaItem}><Text style={styles.accuracyGlyph}>⌖</Text><Text style={styles.metaText}>{accuracyLabel} accuracy</Text></View>
       </View>
+      <LocationTelemetryHud telemetry={telemetry} isNight={isNight} trackingStatus={backgroundStatus} />
       <Animated.ScrollView style={[styles.expandedDetails, { opacity }]} contentContainerStyle={styles.expandedDetailsContent} scrollEnabled={expanded} nestedScrollEnabled>
         <View style={styles.sheetDivider} />
         <View style={styles.featureHeadingRow}>
           <View style={styles.featureCopy}>
             <Text style={styles.detailsLabel}>SCREEN-OFF TRIP TRACKING</Text>
-            <Text style={styles.featureDescription}>{tracking ? 'Your route is being saved on this device.' : 'Keep your route recording while NavDiret is in the background.'}</Text>
+            <Text style={styles.featureDescription}>{tracking
+              ? Platform.OS === 'android' ? 'Your route stays on this device. Android shows an ongoing tracking notification.' : 'Your route is being saved on this device.'
+              : Platform.OS === 'android' ? 'Keep your route recording in the background. Android shows an ongoing status notification while tracking.' : 'Keep your route recording while NavDiret is in the background.'}</Text>
           </View>
           <Pressable accessibilityRole="button" accessibilityLabel={tracking ? 'Stop background trip tracking' : 'Start background trip tracking'} disabled={trackingStarting} onPress={onToggleBackground}
             style={({ pressed }) => [styles.trackingButton, tracking && styles.stopTrackingButton, pressed && styles.controlPressed]}>
@@ -655,73 +663,109 @@ type MapCanvasProps = {
   coordinates: { latitude: number; longitude: number } | null;
   routeCoordinates: { latitude: number; longitude: number }[];
   accuracy: number | null;
-  mapReady: boolean;
-  googleMapRef: React.RefObject<GoogleMaps.MapView | null>;
-  appleMapRef: React.RefObject<AppleMaps.MapView | null>;
+  cameraRef: React.RefObject<CameraRef | null>;
   northUp: boolean;
   isNight: boolean;
   onBearingChange: (bearing: number) => void;
 };
 
-const MapCanvas = memo(function MapCanvas({ coordinates, routeCoordinates, accuracy, mapReady, googleMapRef, appleMapRef, northUp, isNight, onBearingChange }: MapCanvasProps) {
-  const circles = useMemo(() => coordinates ? [{
-    center: coordinates,
-    radius: Math.max(accuracy ?? 24, 18),
-    color: 'rgba(41, 178, 164, 0.18)',
-    lineColor: 'rgba(41, 178, 164, 0.48)',
-    lineWidth: 1.5,
-  }] : [], [accuracy, coordinates]);
-  const cameraPosition = useMemo(() => coordinates ? { coordinates, zoom: 16.5 } : undefined, [coordinates]);
-  const routeLine = useMemo(() => routeCoordinates.length > 1
-    ? [{ id: 'latest-saved-route', coordinates: routeCoordinates, color: '#168C83', width: 6 }]
-    : [], [routeCoordinates]);
+const MapCanvas = memo(function MapCanvas({ coordinates, routeCoordinates, accuracy, cameraRef, northUp, isNight, onBearingChange }: MapCanvasProps) {
+  useEffect(() => {
+    // OSM asks clients to send an identifiable User-Agent. Never use this client for bulk/offline tile downloads.
+    if (Platform.OS === 'web') return;
+    addCustomHeader('User-Agent', 'NavDiret/1.0 (mobile map client)');
+    return () => removeCustomHeader('User-Agent');
+  }, []);
+
+  const routeShape = useMemo<GeoJSON.FeatureCollection>(() => ({
+    type: 'FeatureCollection',
+    features: routeCoordinates.length > 1 ? [{
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'LineString', coordinates: routeCoordinates.map(({ latitude, longitude }) => [longitude, latitude]) },
+    }] : [],
+  }), [routeCoordinates]);
+  const positionShape = useMemo<GeoJSON.FeatureCollection>(() => {
+    if (!coordinates) return { type: 'FeatureCollection', features: [] };
+    const radius = Math.max(accuracy ?? 24, 18);
+    const latitudeDelta = radius / 111_320;
+    const longitudeDelta = radius / (111_320 * Math.max(0.15, Math.cos(coordinates.latitude * Math.PI / 180)));
+    const circle: [number, number][] = [];
+    for (let index = 0; index <= 48; index += 1) {
+      const angle = (index / 48) * Math.PI * 2;
+      circle.push([coordinates.longitude + Math.cos(angle) * longitudeDelta, coordinates.latitude + Math.sin(angle) * latitudeDelta]);
+    }
+    return {
+      type: 'FeatureCollection',
+      features: [
+        { type: 'Feature', properties: { kind: 'accuracy' }, geometry: { type: 'Polygon', coordinates: [circle] } },
+        { type: 'Feature', properties: { kind: 'position' }, geometry: { type: 'Point', coordinates: [coordinates.longitude, coordinates.latitude] } },
+      ],
+    };
+  }, [accuracy, coordinates]);
+  const cameraPosition = useMemo(() => coordinates ? [coordinates.longitude, coordinates.latitude] as [number, number] : undefined, [coordinates]);
+  const regionChanged = useCallback((feature: GeoJSON.Feature) => {
+    const heading = (feature.properties as { heading?: number } | null)?.heading;
+    if (typeof heading === 'number') onBearingChange(heading);
+  }, [onBearingChange]);
 
   return (
     <View style={StyleSheet.absoluteFill}>
-      {mapReady && coordinates && Platform.OS === 'android' ? (
-        <GoogleMaps.View
-          key={northUp ? 'google-north-up' : 'google-map'}
-          ref={googleMapRef}
-          style={StyleSheet.absoluteFill}
-          cameraPosition={cameraPosition}
-          circles={circles}
-          polylines={routeLine}
-          colorScheme={isNight ? GoogleMaps.MapColorScheme.DARK : GoogleMaps.MapColorScheme.LIGHT}
-          properties={{ isBuildingEnabled: true, isIndoorEnabled: true, isMyLocationEnabled: true, selectionEnabled: false }}
-          userLocation={coordinates ? { coordinates, followUserLocation: false } : undefined}
-          uiSettings={{ compassEnabled: false, mapToolbarEnabled: false, myLocationButtonEnabled: false, rotationGesturesEnabled: true, zoomControlsEnabled: false }}
-          onCameraMove={(event) => onBearingChange(event.bearing)}
-        />
-      ) : null}
-      {mapReady && coordinates && Platform.OS === 'ios' ? (
-        <AppleMaps.View
-          key={northUp ? 'apple-north-up' : 'apple-map'}
-          ref={appleMapRef}
-          style={StyleSheet.absoluteFill}
-          cameraPosition={cameraPosition}
-          circles={circles}
-          polylines={routeLine}
-          colorScheme={isNight ? AppleMaps.MapColorScheme.DARK : AppleMaps.MapColorScheme.LIGHT}
-          properties={{ isMyLocationEnabled: true, selectionEnabled: false }}
-          uiSettings={{ compassEnabled: false, myLocationButtonEnabled: false, togglePitchEnabled: false }}
-          onCameraMove={(event) => onBearingChange(event.bearing)}
-        />
-      ) : null}
-      {(!coordinates || !mapReady || Platform.OS === 'web') ? (
-        <View style={[styles.mapPlaceholder, isNight && styles.nightMapPlaceholder]}>
-          <MapArtwork isNight={isNight} />
-          {!mapReady && Platform.OS === 'android' ? (
-            <View style={styles.mapSetupTag}><Text style={styles.mapSetupTitle}>Map tiles need a key</Text><Text style={styles.mapSetupCaption}>Set GOOGLE_MAPS_API_KEY for your native build</Text></View>
-          ) : null}
-        </View>
-      ) : null}
-      {coordinates && (!mapReady || Platform.OS === 'web') ? <UserMarker /> : null}
+      {coordinates ? <MapView
+        style={StyleSheet.absoluteFill}
+        mapStyle={{ version: 8, sources: {}, layers: [{ id: 'background', type: 'background', paint: { 'background-color': isNight ? '#111D22' : '#E8EEE8' } }] }}
+        attributionEnabled={true}
+        attributionPosition={{ bottom: 282, left: 14 }}
+        compassEnabled={false}
+        logoEnabled={false}
+        onRegionDidChange={regionChanged}
+      >
+        <Camera ref={cameraRef} centerCoordinate={cameraPosition} zoomLevel={16.5} heading={northUp ? 0 : undefined} animationMode="easeTo" animationDuration={280} />
+        <RasterSource id="osm-tiles" tileUrlTemplates={[mapTilesUrl]} tileSize={256} maxZoomLevel={19} attribution="© OpenStreetMap contributors" >
+          <RasterLayer id="osm-raster" style={isNight ? { rasterSaturation: -0.75, rasterBrightnessMin: 0.08, rasterBrightnessMax: 0.62 } : {}} />
+        </RasterSource>
+        <ShapeSource id="route-shape" shape={routeShape}><LineLayer id="route-line" style={{ lineColor: '#148F84', lineWidth: 6, lineCap: 'round', lineJoin: 'round', lineOpacity: 0.94 }} /></ShapeSource>
+        <ShapeSource id="position-shape" shape={positionShape}>
+          <FillLayer id="accuracy-halo" filter={['==', ['get', 'kind'], 'accuracy']} style={{ fillColor: 'rgba(41,178,164,0.16)', fillOutlineColor: 'rgba(41,178,164,0.45)' }} />
+          <CircleLayer id="user-dot" filter={['==', ['get', 'kind'], 'position']} style={{ circleColor: '#FFFFFF', circleStrokeColor: '#28AE9E', circleStrokeWidth: 4, circleRadius: 9 }} />
+        </ShapeSource>
+      </MapView> : <View style={[styles.mapPlaceholder, isNight && styles.nightMapPlaceholder]}><MapArtwork isNight={isNight} /></View>}
     </View>
   );
 });
 
-const UserMarker = memo(function UserMarker() {
-  return <View pointerEvents="none" style={styles.userMarkerAnchor}><View style={styles.markerHaloOuter} /><View style={styles.markerHaloInner} /><View style={styles.userMarker}><View style={styles.userMarkerCore} /></View><View style={styles.markerTail} /></View>;
+const LocationTelemetryHud = memo(function LocationTelemetryHud({ telemetry, isNight, trackingStatus }: {
+  telemetry: LocationTelemetry;
+  isNight: boolean;
+  trackingStatus: string;
+}) {
+  const address = telemetry.street || telemetry.nearbyRoad || (telemetry.addressStatus === 'resolving' ? 'Resolving nearby address…' : 'Address unavailable');
+  const area = [telemetry.area, telemetry.nearbyRoad, telemetry.city, telemetry.country].filter(Boolean).join(' · ');
+  const sourceLabel = telemetry.addressSource === 'online' ? 'ONLINE'
+    : telemetry.addressSource === 'cached' ? 'CACHED'
+      : telemetry.addressSource === 'offline' ? 'OFFLINE' : 'UNRESOLVED';
+  const gpsLabel = telemetry.freshness === 'fresh' ? 'GPS LIVE'
+    : telemetry.freshness === 'stale' ? 'GPS STALE' : 'GPS WAITING';
+  const coordinatesLabel = telemetry.latitude !== null && telemetry.longitude !== null
+    ? `${telemetry.latitude.toFixed(5)}, ${telemetry.longitude.toFixed(5)}${telemetry.accuracyMeters !== null ? `  ·  ±${Math.max(1, Math.round(telemetry.accuracyMeters))} m` : ''}`
+    : 'Waiting for a valid location fix';
+  const accessibleLabel = `Location details. ${address}. ${area || 'Area unavailable'}. ${gpsLabel}. Address ${sourceLabel.toLowerCase()}.`;
+  return (
+    <View accessibilityRole="summary" accessibilityLabel={accessibleLabel} style={[styles.telemetryCard, isNight && styles.nightTelemetryCard]}>
+      <View style={styles.telemetryCopy}>
+        <Text style={styles.telemetryEyebrow}>LOCATION DETAILS</Text>
+        <Text numberOfLines={1} style={[styles.telemetryStreet, isNight && styles.nightTelemetryText]}>{address}</Text>
+        <Text numberOfLines={1} style={styles.telemetryArea}>{area || (telemetry.addressStatus === 'resolving' ? 'Updating place context' : 'Area not available yet')}</Text>
+        <Text numberOfLines={1} style={styles.telemetryCoordinates}>{coordinatesLabel}</Text>
+      </View>
+      <View style={styles.telemetryBadges}>
+        <View style={[styles.telemetryBadge, telemetry.freshness === 'fresh' ? styles.telemetryBadgeLive : styles.telemetryBadgeQuiet]}>
+          <Text style={[styles.telemetryBadgeText, telemetry.freshness === 'fresh' && styles.telemetryBadgeLiveText]}>{trackingStatus === 'running' ? 'BACKGROUND' : gpsLabel}</Text>
+        </View>
+        <View style={[styles.telemetryBadge, styles.telemetrySourceBadge]}><Text style={styles.telemetrySourceText}>{sourceLabel}</Text></View>
+      </View>
+    </View>
+  );
 });
 
 const MapArtwork = memo(function MapArtwork({ isNight }: { isNight: boolean }) {
@@ -873,6 +917,22 @@ const styles = StyleSheet.create({
   refreshIcon: { color: COLORS.cyan, fontSize: 25, lineHeight: 28 },
   sheetDivider: { height: StyleSheet.hairlineWidth, backgroundColor: COLORS.line },
   metaRow: { minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 13 },
+  telemetryCard: { minHeight: 86, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 13, paddingVertical: 11, marginTop: 8, marginBottom: 4, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.045)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' },
+  nightTelemetryCard: { backgroundColor: 'rgba(3,10,14,0.40)', borderColor: 'rgba(164,207,208,0.12)' },
+  telemetryCopy: { flex: 1, minWidth: 0 },
+  telemetryEyebrow: { color: '#7F989D', fontSize: 8, fontWeight: '900', letterSpacing: 1.15, marginBottom: 4 },
+  telemetryStreet: { color: '#E9F1EF', fontSize: 12, fontWeight: '800' },
+  nightTelemetryText: { color: '#F0F5F4' },
+  telemetryArea: { color: '#A7B8BA', fontSize: 9, marginTop: 3 },
+  telemetryCoordinates: { color: '#7F969A', fontSize: 8, fontVariant: ['tabular-nums'], marginTop: 5 },
+  telemetryBadges: { alignItems: 'flex-end', gap: 6 },
+  telemetryBadge: { minHeight: 21, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 7, borderRadius: 8, borderWidth: 1 },
+  telemetryBadgeLive: { backgroundColor: 'rgba(45,157,132,0.13)', borderColor: 'rgba(114,229,209,0.22)' },
+  telemetryBadgeQuiet: { backgroundColor: 'rgba(224,166,95,0.10)', borderColor: 'rgba(224,166,95,0.20)' },
+  telemetryBadgeText: { color: '#E5BF8A', fontSize: 7, fontWeight: '900', letterSpacing: 0.45 },
+  telemetryBadgeLiveText: { color: COLORS.cyan },
+  telemetrySourceBadge: { backgroundColor: 'rgba(255,255,255,0.045)', borderColor: 'rgba(255,255,255,0.08)' },
+  telemetrySourceText: { color: '#A7B7B9', fontSize: 7, fontWeight: '800', letterSpacing: 0.4 },
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   metaStatusDot: { width: 7, height: 7, borderRadius: 4 },
   metaText: { color: '#D5DFE0', fontSize: 11, fontWeight: '600' },
@@ -915,9 +975,6 @@ const styles = StyleSheet.create({
   park: { position: 'absolute', backgroundColor: '#C9DDC8', borderRadius: 28, borderWidth: 1, borderColor: 'rgba(100,151,114,0.14)' },
   parkOne: { width: 95, height: 120, top: '31%', left: '12%', transform: [{ rotate: '22deg' }] },
   parkTwo: { width: 118, height: 85, top: '66%', right: '8%', transform: [{ rotate: '-18deg' }] },
-  mapSetupTag: { position: 'absolute', top: '40%', alignSelf: 'center', alignItems: 'center', backgroundColor: 'rgba(12,30,37,0.90)', borderRadius: 18, paddingHorizontal: 19, paddingVertical: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' },
-  mapSetupTitle: { color: COLORS.white, fontSize: 13, fontWeight: '700' },
-  mapSetupCaption: { color: '#A9BCC0', fontSize: 10, marginTop: 5 },
   diagnosticsScrim: { flex: 1, justifyContent: 'center', paddingHorizontal: 20, backgroundColor: 'rgba(3,12,17,0.76)' },
   searchModal: { flex: 1, backgroundColor: COLORS.ink, paddingHorizontal: 22, paddingTop: 20 },
   searchModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 22 },
@@ -999,10 +1056,4 @@ const styles = StyleSheet.create({
   diagnosticRow: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: COLORS.line, paddingVertical: 11 },
   diagnosticLabel: { color: '#879CA2', textTransform: 'uppercase', fontSize: 9, fontWeight: '700', letterSpacing: 1 },
   diagnosticValue: { color: '#EDF3F2', fontSize: 12, marginTop: 5 },
-  userMarkerAnchor: { position: 'absolute', top: '45%', left: '50%', width: 1, height: 1, alignItems: 'center', justifyContent: 'center' },
-  markerHaloOuter: { position: 'absolute', width: 106, height: 106, borderRadius: 54, backgroundColor: 'rgba(48,180,161,0.10)', borderWidth: 1, borderColor: 'rgba(48,180,161,0.11)' },
-  markerHaloInner: { position: 'absolute', width: 62, height: 62, borderRadius: 32, backgroundColor: 'rgba(48,180,161,0.12)', borderWidth: 1, borderColor: 'rgba(48,180,161,0.26)' },
-  userMarker: { width: 24, height: 24, borderRadius: 13, backgroundColor: '#FFFFFF', borderWidth: 3, borderColor: '#28AE9E', alignItems: 'center', justifyContent: 'center', shadowColor: '#155D5B', shadowOpacity: 0.35, shadowRadius: 9, shadowOffset: { width: 0, height: 3 }, elevation: 6 },
-  userMarkerCore: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#28AE9E' },
-  markerTail: { position: 'absolute', top: 11, width: 9, height: 9, backgroundColor: '#28AE9E', transform: [{ rotate: '45deg' }], zIndex: -1 },
 });

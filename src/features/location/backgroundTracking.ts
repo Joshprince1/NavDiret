@@ -1,5 +1,6 @@
 import * as Location from 'expo-location';
 import * as Battery from 'expo-battery';
+import { PermissionsAndroid, Platform } from 'react-native';
 
 import { BACKGROUND_LOCATION_TASK } from './backgroundLocationTask';
 import { finishRouteSession, startRouteSession } from '../offline/offlineStore';
@@ -18,8 +19,8 @@ function trackingOptions(powerSave: boolean) {
     foregroundService: {
       notificationTitle: 'NavDiret is tracking your trip',
       notificationBody: powerSave
-        ? 'Battery saver is on · location samples are less frequent. Saved on this device.'
-        : 'Your location is saved on this device while you travel.',
+        ? 'Battery saver is on · GPS updates are less frequent. Trip details stay on this device. Tap to return.'
+        : 'GPS tracking is active · trip details stay on this device. Tap to return to NavDiret.',
       notificationColor: '#146B68',
       killServiceOnDestroy: false,
     },
@@ -32,6 +33,23 @@ async function getPowerSaveProfile() {
     return power.lowPowerMode || (power.batteryState === Battery.BatteryState.UNPLUGGED
       && power.batteryLevel >= 0 && power.batteryLevel <= 0.2);
   } catch { return false; }
+}
+
+async function requestTrackingNotificationPermission() {
+  if (Platform.OS !== 'android' || Number(Platform.Version) < 33) return true;
+  const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
+  try {
+    if (await PermissionsAndroid.check(permission)) return true;
+    const result = await PermissionsAndroid.request(permission, {
+      title: 'Show trip tracking status',
+      message: 'NavDiret uses an ongoing notification while screen-off location tracking is active. It shows tracking status and provides a way back to the app. Your trip details stay on this device.',
+      buttonPositive: 'Allow',
+      buttonNegative: 'Not now',
+    });
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  } catch {
+    return false;
+  }
 }
 
 export async function isBackgroundTrackingActive() {
@@ -59,6 +77,8 @@ export async function startBackgroundTracking() {
     return { status: 'permission-needed' as const, message: 'Allow all-the-time location access in system settings to track with the screen off.' };
   }
 
+  const notificationsAllowed = await requestTrackingNotificationPermission();
+
   if (await isBackgroundTrackingActive()) return { status: 'running' as const, message: null };
 
   await startRouteSession();
@@ -70,7 +90,10 @@ export async function startBackgroundTracking() {
     activePowerSaveProfile = powerSave;
     return {
       status: 'running' as const,
-      message: powerSave ? 'Battery saver is active. Background location samples will be less frequent to extend battery life.' : null,
+      message: [
+        powerSave ? 'Battery saver is active. Background location samples will be less frequent to extend battery life.' : null,
+        !notificationsAllowed ? 'Notification access is off. Android keeps the tracking service visible in Task Manager, but may hide it from the notification drawer.' : null,
+      ].filter(Boolean).join(' ') || null,
     };
   } catch (error) {
     await finishRouteSession();

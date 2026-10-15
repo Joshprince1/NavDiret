@@ -1,21 +1,17 @@
 const staticConfig = require('./app.json');
 
 module.exports = ({ config }) => {
-  const googleMapsApiKey = process.env.GOOGLE_MAPS_API_KEY;
   const routingBaseUrl = process.env.NAVDIRET_ROUTING_URL;
   const geocodingBaseUrl = process.env.NAVDIRET_GEOCODING_URL;
   const routingProfile = process.env.NAVDIRET_ROUTING_PROFILE || 'driving';
+  const mapTilesUrl = process.env.NAVDIRET_MAP_TILES_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
   return {
     ...staticConfig.expo,
     ...config,
-    android: {
-      ...staticConfig.expo.android,
-      ...config.android,
-      ...(googleMapsApiKey ? { config: { ...config.android?.config, googleMaps: { apiKey: googleMapsApiKey } } } : {}),
-    },
+    android: { ...staticConfig.expo.android, ...config.android },
     extra: {
       ...config.extra,
-      googleMapsConfigured: Boolean(googleMapsApiKey),
+      mapTilesUrl,
       routingBaseUrl: routingBaseUrl || null,
       geocodingBaseUrl: geocodingBaseUrl || null,
       routingProfile,

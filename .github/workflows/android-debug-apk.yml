@@ -1,0 +1,87 @@
+name: Android debug APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-debug-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Validate and build debug APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-37" \
+            "build-tools;37.0.0" \
+            "ndk;27.1.12297006"
+
+      - name: Install dependencies from lockfile
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Location telemetry tests
+        run: npm run test:location
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Check Expo dependency compatibility
+        run: npx expo install --check
+
+      - name: Evaluate Expo config
+        run: npx expo config --type public
+
+      - name: Generate Android project
+        run: npx expo prebuild --platform android --no-install --no-clean
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -o pipefail
+          cd android
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../android-build.log
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: NavDiret-debug-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Gradle build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: NavDiret-android-build-log-${{ github.run_id }}
+          path: android-build.log
+          if-no-files-found: ignore
+          retention-days: 14

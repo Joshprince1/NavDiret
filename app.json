@@ -36,11 +36,12 @@
           "isIosBackgroundLocationEnabled": true
         }
       ],
-      "expo-maps",
+      "@maplibre/maplibre-react-native",
+      "./plugins/withMapLibreBuildConfig",
+      "./plugins/withAndroidKotlinVersion",
       "expo-sqlite"
     ],
     "extra": {
-      "googleMapsConfigured": false,
       "routingBaseUrl": {},
       "geocodingBaseUrl": {},
       "routingProfile": "driving",

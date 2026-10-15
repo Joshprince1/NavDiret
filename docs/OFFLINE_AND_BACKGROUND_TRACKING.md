@@ -4,7 +4,7 @@
 
 NavDiret stores reverse-geocoded place names, saved destinations, recent place names, saved road routes, the latest location fix, trip sessions, and breadcrumbs in on-device SQLite (`navdiret-offline.db`). There is no automatic sync endpoint, upload queue, or background data drain. Existing outbox tables from earlier builds are dropped when the database opens; the canonical place and route data remain in their local tables. The connectivity badge reports network state only.
 
-Native Apple Maps and Google Maps basemaps are supplied by their respective map providers. NavDiret does not download offline map regions or guarantee street tiles remain available without a connection. Saved destination and route data remain available independently.
+MapLibre renders the OpenStreetMap raster basemap at `https://tile.openstreetmap.org/{z}/{x}/{y}.png` by default; `NAVDIRET_MAP_TILES_URL` can select a compatible endpoint at build time. Show OpenStreetMap attribution wherever the map is displayed and follow the selected tile provider's usage and caching policies. The public OSM tile service is best-effort and does not allow bulk prefetch for offline use. NavDiret does not promise offline street tiles; saved place names, destination coordinates, route geometry, and location history remain local and usable independently.
 
 ## Routing and search adapters
 
@@ -22,13 +22,17 @@ Do not point this client autocomplete at the public `nominatim.openstreetmap.org
 
 ## Background tracking and geocoding
 
-Background tracking is opt-in from the expanded place sheet. The app requests foreground permission first and background/Always permission only after the user starts a trip. Android displays its foreground-service notification; iOS shows its background location indicator. Route points and nearby cached place labels are stored locally in SQLite even when the UI is not mounted.
+Background tracking is opt-in from the expanded place sheet. The app requests foreground permission first and background/Always permission only after the user starts a trip. On Android 13+, NavDiret also requests notification permission in this context. If it is denied, tracking can still run and Android exposes the foreground service in Task Manager, but the notification may not appear in the notification drawer. Android displays the persistent foreground-service notification configured by `expo-location`; its body states tracking and local-only storage, and tapping it returns to NavDiret. Android requires a foreground-service notification while this location service runs, so the app does not offer a switch that hides it. Expo SDK 58 exposes a static notification title/body for this service; live address text is not rewritten on every GPS update. iOS shows its background location indicator. Route points and nearby cached place labels are stored locally in SQLite even when the UI is not mounted.
 
 When tracking is active, background reverse-geocoding is considered only if the device is online, no nearby cached place exists, and both at least 120 seconds and 200 meters have elapsed since the prior attempt. The attempt time and coordinates are persisted before calling the platform geocoder, so task restarts and failed lookups do not bypass the throttle. Results are cached locally; no route or location payload is sent to a NavDiret cloud server.
 
 Background location requires a native development or production build; Expo Go does not support it. Rebuild after changing location permissions in `app.json`. Operating systems can pause location updates, and force-quitting/terminating the app stops tracking; Android vendors can also apply battery restrictions.
 
 The tracking service samples at a balanced 10-second / 15-meter profile normally. Low-power mode or an unplugged battery at or below 20% switches to 30 seconds / 45 meters. While battery saver is active or an unplugged battery is at or below 15%, optional background reverse-geocoding is skipped while local breadcrumb recording continues. When GPS freshness is lost during guidance, distance and reroute decisions pause until a fresh fix arrives. Haptic turn cues are limited to configured live routes and trigger once as a maneuver approaches; practice simulations do not vibrate for synthetic turns.
+
+The live location-details HUD derives street, area, nearby road, city, country, coordinates, accuracy, freshness, and cache/network resolution state from the existing foreground GPS session. It never invents address fields, discards a delayed address if the phone has moved more than 100 meters from its request coordinate, and leaves valid coordinates visible when geocoding is unavailable. Foreground lookup attempts are locally throttled to at least 30 seconds and 50 meters apart; repeated coordinates share in-flight work and recent lookups are held briefly in memory as well as the existing SQLite cache.
+
+NavDiret currently has no native WindowManager overlay module or user-facing overlay authorization flow. The `SYSTEM_ALERT_WINDOW` permission in generated Android output alone is not an overlay feature and should not be treated as one. No floating-HUD preference is exposed until a real native service, settings-intent permission flow, and cleanup lifecycle are implemented.
 
 ## Guidance, favorites, appearance, and speed
 
