@@ -43,7 +43,7 @@ jobs:
           printf 'y\n%.0s' {1..100} > "$license_answers"
           "$sdkmanager" --licenses < "$license_answers"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-37" \
+            "platforms;android-37.0" \
             "build-tools;37.0.0" \
             "ndk;27.1.12297006"
 
